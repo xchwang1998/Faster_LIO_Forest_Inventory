@@ -14,6 +14,9 @@
 #include "options.h"
 #include "pointcloud_preprocess.h"
 
+#include <pcl/common/transforms.h>
+#include <Eigen/Geometry>
+
 namespace faster_lio {
 
 class LaserMapping {
@@ -61,6 +64,7 @@ class LaserMapping {
     void PublishFrameEffectWorld(const ros::Publisher &pub_laser_cloud_effect_world);
     void Savetrajectory(const std::string &traj_file);
 
+    void Publish_key_frame_info(const ros::Publisher pubKeyFrameInfo);
     void Finish();
 
    private:
@@ -69,8 +73,12 @@ class LaserMapping {
 
     void PointBodyToWorld(PointType const *pi, PointType *const po);
     void PointBodyToWorld(const common::V3F &pi, PointType *const po);
+    // transform the ouster point from body to world
+    void pointBodyToWorld(ouster_ros::Point const * const pi, ouster_ros::Point * const po);
     void PointBodyLidarToIMU(PointType const *const pi, PointType *const po);
 
+    std::vector<double> getKeyTransformation();
+    
     void MapIncremental();
 
     void SubAndPubToROS(ros::NodeHandle &nh);
@@ -126,6 +134,12 @@ class LaserMapping {
     std::deque<PointCloudType::Ptr> lidar_buffer_;
     std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer_;
     nav_msgs::Odometry odom_aft_mapped_;
+
+    // add the ouster buffer, current ouster, and the key frame pose data
+    std::deque<pcl::PointCloud<ouster_ros::Point>::Ptr> ouster_buffer;
+    pcl::PointCloud<ouster_ros::Point>::Ptr ouster_undistort{new pcl::PointCloud<ouster_ros::Point>()};
+    pcl::PointCloud<PointTypePose>::Ptr key_frame_poses_data{new pcl::PointCloud<PointTypePose>()};
+    ros::Publisher pubKeyFrameInfo;
 
     /// options
     bool time_sync_en_ = false;

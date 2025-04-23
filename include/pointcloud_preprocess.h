@@ -94,6 +94,10 @@ class PointCloudPreprocess {
     /// processors
     void Process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudType::Ptr &pcl_out);
     void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudType::Ptr &pcl_out);
+    void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, 
+                PointCloudType::Ptr &pcl_out, 
+                pcl::PointCloud<ouster_ros::Point>::Ptr &ouster_out);
+
     void Set(LidarType lid_type, double bld, int pfilt_num);
 
     // accessors

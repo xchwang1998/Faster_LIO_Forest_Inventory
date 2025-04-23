@@ -258,6 +258,9 @@ void LaserMapping::SubAndPubToROS(ros::NodeHandle &nh) {
     pub_laser_cloud_effect_world_ = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered_effect_world", 100000);
     pub_odom_aft_mapped_ = nh.advertise<nav_msgs::Odometry>("/Odometry", 100000);
     pub_path_ = nh.advertise<nav_msgs::Path>("/path", 100000);
+    
+    // publish the key frame info messages
+    pubKeyFrameInfo = nh.advertise<faster_lio::key_frame_info>("/faster_lio/key_frame_info", 100000);
 }
 
 LaserMapping::LaserMapping() {
@@ -351,6 +354,8 @@ void LaserMapping::Run() {
         }
     }
 
+    Publish_key_frame_info(pubKeyFrameInfo);
+
     // Debug variables
     frame_num_++;
 }
@@ -366,7 +371,11 @@ void LaserMapping::StandardPCLCallBack(const sensor_msgs::PointCloud2::ConstPtr 
             }
 
             PointCloudType::Ptr ptr(new PointCloudType());
-            preprocess_->Process(msg, ptr);
+            pcl::PointCloud<ouster_ros::Point>::Ptr ouster_ptr(new pcl::PointCloud<ouster_ros::Point>());
+            // preprocess_->Process(msg, ptr);
+            preprocess_->Process(msg, ptr, ouster_ptr);
+            ouster_buffer.push_back(ouster_ptr);
+
             lidar_buffer_.push_back(ptr);
             time_buffer_.push_back(msg->header.stamp.toSec());
             last_timestamp_lidar_ = msg->header.stamp.toSec();
@@ -441,6 +450,8 @@ bool LaserMapping::SyncPackages() {
         measures_.lidar_ = lidar_buffer_.front();
         measures_.lidar_bag_time_ = time_buffer_.front();
 
+        ouster_undistort = ouster_buffer.front();
+
         if (measures_.lidar_->points.size() <= 1) {
             LOG(WARNING) << "Too few input point cloud!";
             lidar_end_time_ = measures_.lidar_bag_time_ + lidar_mean_scantime_;
@@ -473,6 +484,8 @@ bool LaserMapping::SyncPackages() {
 
     lidar_buffer_.pop_front();
     time_buffer_.pop_front();
+    ouster_buffer.pop_front();
+
     lidar_pushed_ = false;
     return true;
 }
@@ -789,7 +802,6 @@ void LaserMapping::Savetrajectory(const std::string &traj_file) {
         LOG(ERROR) << "Failed to open traj_file: " << traj_file;
         return;
     }
-
     ofs << "#timestamp x y z q_x q_y q_z q_w" << std::endl;
     for (const auto &p : path_.poses) {
         ofs << std::fixed << std::setprecision(6) << p.header.stamp.toSec() << " " << std::setprecision(15)
@@ -798,6 +810,64 @@ void LaserMapping::Savetrajectory(const std::string &traj_file) {
     }
 
     ofs.close();
+}
+
+/******* Publish Key Frame Info *******/
+void LaserMapping::Publish_key_frame_info(const ros::Publisher pubKeyFrameInfo)
+{
+    // set the key frame info
+    faster_lio::key_frame_info keyframeInfo;
+    keyframeInfo.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    keyframeInfo.header.frame_id = "camera_init";
+    pcl::PointCloud<ouster_ros::Point>::Ptr cloud(new pcl::PointCloud<ouster_ros::Point>);
+
+    // transformed the ouster data
+    int size = ouster_undistort->points.size();
+    pcl::PointCloud<ouster_ros::Point>::Ptr ousterCloudWorld(new pcl::PointCloud<ouster_ros::Point>(size,1));
+    for (int i = 0; i < size; i++)
+    {
+        pointBodyToWorld(&ouster_undistort->points[i], &ousterCloudWorld->points[i]);
+    }
+
+    // get the original Ouster data
+    sensor_msgs::PointCloud2 ousterCloudOriMsg;
+    pcl::toROSMsg(*ouster_undistort, ousterCloudOriMsg);
+    ousterCloudOriMsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    ousterCloudOriMsg.header.frame_id = "camera_init";
+    
+    // get the transformed Ouster data
+    sensor_msgs::PointCloud2 ousterCloudWorldMsg;
+    pcl::toROSMsg(*ousterCloudWorld, ousterCloudWorldMsg);
+    ousterCloudWorldMsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+    ousterCloudWorldMsg.header.frame_id = "camera_init";
+    
+    // get current transtformation
+    std::vector<double> curr_pose = getKeyTransformation();
+    // set the key frame Info msg data (include original data and tranformed to world)
+    keyframeInfo.key_frame_cloud_ori = ousterCloudOriMsg;
+    keyframeInfo.key_frame_cloud_transed = ousterCloudWorldMsg;
+
+    /*** slected the keyframe at 1Hz ***/
+    static int jjj = 0;
+    if (jjj % 10 == 0) 
+    {
+        // stack the pose at 1 Hz
+        PointTypePose pj;
+        pj.x = curr_pose[0]; pj.y = curr_pose[1]; pj.z = curr_pose[2];
+        pj.roll = curr_pose[3]; pj.pitch = curr_pose[4]; pj.yaw = curr_pose[5];
+        key_frame_poses_data->push_back(pj);
+        
+        // convert the point cloud into sensor message
+        sensor_msgs::PointCloud2 keyFramePosesMsg;
+        keyFramePosesMsg.header.stamp = ros::Time().fromSec(lidar_end_time_);
+        keyFramePosesMsg.header.frame_id = "camera_init";
+        pcl::toROSMsg(*key_frame_poses_data, keyFramePosesMsg);
+        
+        // set the data of key frame info
+        keyframeInfo.key_frame_poses = keyFramePosesMsg;
+        pubKeyFrameInfo.publish(keyframeInfo);
+    }
+    jjj++;
 }
 
 ///////////////////////////  private method /////////////////////////////////////////////////////////////////////
@@ -834,6 +904,34 @@ void LaserMapping::PointBodyToWorld(const common::V3F &pi, PointType *const po) 
     po->intensity = std::abs(po->z);
 }
 
+// transform the ouster point from body to world
+void LaserMapping::pointBodyToWorld(ouster_ros::Point const * const pi, ouster_ros::Point * const po)
+{
+    if (pi == nullptr) {
+        std::cerr << "Error: Null pointer of pi!" << std::endl;
+        return;
+    }
+    if (po == nullptr) {
+        std::cerr << "Error: Null pointer of po!" << std::endl;
+        return;
+    }
+    common::V3D p_body(pi->x, pi->y, pi->z);
+    common::V3D p_global(state_point_.rot * (state_point_.offset_R_L_I * p_body + state_point_.offset_T_L_I) +
+                         state_point_.pos);
+
+    po->x = p_global(0);
+    po->y = p_global(1);
+    po->z = p_global(2);
+
+    // copy pi
+    po->intensity = pi->intensity;
+    po->t = pi->t;
+    po->reflectivity = pi->reflectivity;
+    po->ring = pi->ring;
+    po->ambient = pi->ambient;
+    po->range = pi->range;
+}
+
 void LaserMapping::PointBodyLidarToIMU(PointType const *const pi, PointType *const po) {
     common::V3D p_body_lidar(pi->x, pi->y, pi->z);
     common::V3D p_body_imu(state_point_.offset_R_L_I * p_body_lidar + state_point_.offset_T_L_I);
@@ -842,6 +940,26 @@ void LaserMapping::PointBodyLidarToIMU(PointType const *const pi, PointType *con
     po->y = p_body_imu(1);
     po->z = p_body_imu(2);
     po->intensity = pi->intensity;
+}
+
+std::vector<double> LaserMapping::getKeyTransformation()
+{
+    // get the keypose (R2R1, R2t1+t2)
+    SO3 ROT = state_point_.rot * state_point_.offset_R_L_I;
+    vect3 TRANS = state_point_.rot * state_point_.offset_T_L_I + state_point_.pos;
+    Eigen::Affine3d affine = Eigen::Affine3d::Identity();
+    affine.linear() = ROT.toRotationMatrix();
+    affine.translation() = TRANS;
+
+    // convert to the x y z roll pitch yaw variables
+	std::vector<double> transformed_para;
+    double x, y, z, roll, pitch, yaw;
+    pcl::getTranslationAndEulerAngles(affine, x, y, z, roll, pitch, yaw);
+	
+	// return data
+	transformed_para.push_back(x); transformed_para.push_back(y); transformed_para.push_back(z);
+	transformed_para.push_back(roll); transformed_para.push_back(pitch); transformed_para.push_back(yaw);
+	return transformed_para;
 }
 
 void LaserMapping::Finish() {

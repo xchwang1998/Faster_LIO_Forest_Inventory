@@ -6,6 +6,7 @@
 #include <csignal>
 
 #include "laser_mapping.h"
+#include <filesystem>
 
 /// run the lidar mapping in online mode
 
@@ -42,10 +43,14 @@ int main(int argc, char **argv) {
 
     LOG(INFO) << "finishing mapping";
     laser_mapping->Finish();
-
+    
     faster_lio::Timer::PrintAll();
-    LOG(INFO) << "save trajectory to: " << FLAGS_traj_log_file;
-    laser_mapping->Savetrajectory(FLAGS_traj_log_file);
+    
+    // LOG(INFO) << "save trajectory to: " << FLAGS_traj_log_file;
+    // laser_mapping->Savetrajectory(FLAGS_traj_log_file);
+
+    LOG(INFO) << "save trajectory to: " << std::string(ROOT_DIR) + "Log/traj.txt";
+    laser_mapping->Savetrajectory(std::string(ROOT_DIR) + "Log/traj.txt");
 
     return 0;
 }

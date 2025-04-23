@@ -33,6 +33,27 @@ void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg
     *pcl_out = cloud_out_;
 }
 
+void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg, 
+                                    PointCloudType::Ptr &pcl_out, 
+                                    pcl::PointCloud<ouster_ros::Point>::Ptr &ouster_out)
+{
+    switch (lidar_type_) {
+        case LidarType::OUST64:
+            Oust64Handler(msg);
+            pcl::fromROSMsg(*msg, *ouster_out);
+            break;
+
+        case LidarType::VELO32:
+            VelodyneHandler(msg);
+            break;
+
+        default:
+            LOG(ERROR) << "Error LiDAR Type";
+            break;
+    }
+    *pcl_out = cloud_out_;    
+}
+
 void PointCloudPreprocess::AviaHandler(const livox_ros_driver::CustomMsg::ConstPtr &msg) {
     cloud_out_.clear();
     cloud_full_.clear();
