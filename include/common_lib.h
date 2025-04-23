@@ -14,6 +14,7 @@
 #include <unsupported/Eigen/ArpackSupport>
 
 #include "faster_lio/Pose6D.h"
+#include "faster_lio/key_frame_info.h" // add the "key_frame_info" message
 #include "options.h"
 #include "so3_math.h"
 

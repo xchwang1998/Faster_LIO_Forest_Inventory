@@ -32,11 +32,13 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
         FILES
         Pose6D.msg
+        key_frame_info.msg
 )
 
 generate_messages(
         DEPENDENCIES
         geometry_msgs
+        sensor_msgs
 )
 catkin_package(
         CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime
